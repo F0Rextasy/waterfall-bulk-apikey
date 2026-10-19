@@ -29,17 +29,39 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
-const { parseProxy, loadPoolFile, fetchText } = require('../../river-bulk-apikey/src/proxy');
-const { Mailtrap } = require('../../river-bulk-apikey/src/mailtrap');
-const { TempTf } = require('../../river-bulk-apikey/src/temptf');
-const ROOT = path.join(__dirname, '..', '..');
+// Vendored so the shipped `src/cli.js` is self-contained: the same
+// `./vendor/*` paths resolve in the lab (`providers/waterfall/`) and in the
+// published repo (`<repo>/src/`).
+const { parseProxy, loadPoolFile, fetchText } = require('./vendor/proxy.js');
+const { Mailtrap } = require('./vendor/mailtrap.js');
+const { TempTf } = require('./vendor/temptf.js');
+// Two layouts, one source: the lab checkout (`providers/waterfall/`) and the
+// published one (`<repo>/src/cli.js`). Everything the user owns — keys,
+// accounts, state, their proxy list — lives in the checkout root, which is
+// exactly where `connect-9router.js` looks for `keys.txt`.
+const IS_SRC = path.basename(__dirname) === 'src';
+const CHECKOUT = IS_SRC ? path.resolve(__dirname, '..') : __dirname;
+const LAB = path.resolve(__dirname, '..', '..');
+const LAB_POOLS = IS_SRC ? [] : [LAB];
 const REG = 'https://api.getwaterfall.org/v1';
 const API = 'https://api.getwaterfall.org/api/v1';
-const KEYS_FILE = path.join(__dirname, 'keys.txt');
-const ACCOUNTS_FILE = path.join(__dirname, 'accounts.json');
-const STATE_FILE = path.join(__dirname, 'state.json');
-const EXITS_FILE = path.join(ROOT, 'proxy-lab/out/waterfall-exits.json');
-const REPORT_FILE = path.join(ROOT, 'proxy-lab/out/waterfall-scale-20261019.md');
+const KEYS_FILE = path.join(CHECKOUT, 'keys.txt');
+const ACCOUNTS_FILE = path.join(CHECKOUT, 'accounts.json');
+const STATE_FILE = path.join(CHECKOUT, 'state.json');
+const EXITS_FILE = IS_SRC
+  ? path.join(CHECKOUT, 'waterfall-exits.json')
+  : path.join(LAB, 'proxy-lab/out/waterfall-exits.json');
+const REPORT_FILE = IS_SRC ? path.join(CHECKOUT, 'run.log') : path.join(LAB, 'proxy-lab/out/waterfall-scale-20261019.md');
+
+/** First existing candidate for a pool/dump file: cwd, checkout, lab root. */
+function findPoolFile(file) {
+  if (path.isAbsolute(file)) return fs.existsSync(file) ? file : null;
+  for (const base of [process.cwd(), CHECKOUT, ...LAB_POOLS]) {
+    const f = path.join(base, file);
+    if (fs.existsSync(f)) return f;
+  }
+  return null;
+}
 // The `-free` twins 429/503 for hours at a time (measured 2026-10-19); the
 // `-nvidia-direct` id of the same model kept answering 200 through the same keys,
 // so it leads the gate and the twins stay as the fallback pair.
@@ -65,7 +87,7 @@ const UA_POOL = [
 // The user's own pool comes first: WATERFALL_PROXIES env (launcher) or a local
 // proxies.txt next to this file; the named lab dumps below are spare tanks.
 const PROXY_POOLS = [
-  { file: process.env.WATERFALL_PROXIES || path.join(__dirname, 'proxies.txt') },
+  { file: process.env.WATERFALL_PROXIES || 'proxies.txt' },
   { file: 'proxy-lab/out/proxies-emergency.txt' },
   { file: 'proxy-lab/out/chrome-safe-exits.txt' },
   { file: 'proxy-lab/out/free-proxies-live.txt' },
@@ -131,11 +153,11 @@ function allExits() {
     out.push({ ...p, key });
   };
   for (const spec of PROXY_POOLS) {
-    const f = path.join(ROOT, spec.file);
-    if (!fs.existsSync(f)) continue;
+    const f = findPoolFile(spec.file);
+    if (!f) continue;
     for (const line of poolLines(f, spec)) add(parseProxy(line));
   }
-  const screened = path.join(ROOT, 'proxy-lab/out/waterfall-exits.json');
+  const screened = findPoolFile('proxy-lab/out/waterfall-exits.json') || EXITS_FILE;
   if (fs.existsSync(screened)) {
     for (const entry of JSON.parse(fs.readFileSync(screened, 'utf8'))) add(parseProxy(entry.proxy || entry));
   }
