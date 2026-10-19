@@ -4,7 +4,7 @@
 /**
  * Connect Waterfall to a 9Router instance.
  *
- * Waterfall serves an OpenAI-compatible endpoint (https://inference.waterfall.global/v1), so a single
+ * Waterfall serves an OpenAI-compatible endpoint (https://api.getwaterfall.org/api/v1), so a single
  * provider-node carries every key: this registers one `openai-compatible` node
  * with prefix `waterfall` and then one connection per API key, named
  * `waterfall-001`, `waterfall-002`, … Re-running it is idempotent (an existing node
@@ -13,7 +13,7 @@
  * Usage:
  *   node src/connect-9router.js \
  *     --base http://localhost:20128 --password 123456 \
- *     --api-key dahl_xxxx [--name "Waterfall"] [--prefix waterfall]
+ *     --api-key wf-xxxx [--name "Waterfall"] [--prefix waterfall]
  *
  *   node src/connect-9router.js                  # register every key in keys.txt
  *   node src/connect-9router.js --model <id>     # pin the connection's default model
@@ -24,7 +24,7 @@
  *   --api-key <key>    Waterfall API key     (default: every key in keys.txt)
  *   --name <name>      provider-node name       (default Waterfall)
  *   --prefix <slug>    provider prefix in 9Router (default waterfall)
- *   --base-url <url>   provider base URL        (default https://inference.waterfall.global/v1)
+ *   --base-url <url>   provider base URL        (default https://api.getwaterfall.org/api/v1)
  *   --model <id>       connection default model (default MiniMaxAI/MiniMax-M2.7)
  *
  * Zero dependencies. Node.js >= 18.
