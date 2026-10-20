@@ -75,7 +75,7 @@ curl https://api.getwaterfall.org/api/v1/chat/completions \
 # clone or fork this repository, then:
 cd waterfall-bulk-apikey
 
-# 1) your proxy list, one per line (http://… or socks5://…)
+# 1) your proxy list, one per line (http://… or socks5://…) — optional: without it the tool runs direct
 printf 'http://127.0.0.1:8080\n' > proxies.txt
 
 # 2) go
@@ -134,17 +134,22 @@ node src/cli.js <mode> [flags]
 
 | Mode | Flags | Meaning |
 | --- | --- | --- |
-| `run` | `--count N` · `--concurrency N` · `--mail <rail>` · `--model <id>` | mint + gate (≈2.9 s/key at 24 workers on the operator's fleet) |
+| `run` | `--count N` · `--concurrency N` · `--mail <rail>` · `--model <id>` · `--pool <file>` | mint + gate (≈2.9 s/key at 24 workers on the operator's fleet) |
 | `gate` | `--rounds N` | re-sweep keys that answered 429/503 |
 | `probe` | — | exits · mail rail · catalogue · existing-key gate |
 | `screen` | — | raw lists → live exit pool |
 | `collect` | — | rebuild `keys.txt` from `accounts.json` |
 
-Defaults: `--count 50`, `--concurrency 12`, `--mail chain` (real alias → broker).
+Defaults: `--count 50`, `--concurrency 12`, `--mail chain` (real alias → broker). The proxy list (`--pool <file>` / env `WATERFALL_PROXIES` / `proxies.txt`) is **optional** — without it the tool connects directly.
 
 ## 🛰️ Behind a proxy
 
-Every request leaves through an exit from your pool; the rail rotates exits per account and records egress in `state.json`. Registration is limited to **5 accounts per network path per day**, so rotate exits aggressively.
+**Optional — recommended at scale (per-IP limits, bans).** The tool works without a proxy too.
+
+- **With a pool:** pass `--pool <file>` (or set `WATERFALL_PROXIES`) and every request goes through an exit from that list; the rail rotates exits per account and records egress in `state.json`. A dead line fails that attempt — fail-closed while a pool is provided: a supplied pool never falls back to your own IP.
+- **Without a pool:** the CLI prints `running WITHOUT a proxy (direct)` and connects directly. Sign-up, PoW, verification and the chat gate are unchanged — only where the packets leave from.
+- Registration is limited to **5 accounts per network path per day**, so rotate exits aggressively — with no pool that whole cap belongs to your single direct line.
+- Run `--screen` against either mode: it tests the exits you have (or the direct route) against Waterfall before a real run.
 
 ## 📄 Files
 
@@ -153,7 +158,7 @@ Every request leaves through an exit from your pool; the rail rotates exits per 
 | `keys.txt` | chat-200 keys, one per line with a `# chat-200 <model>` mark; ungated stragglers carry a `# ungated` mark — git-ignored |
 | `accounts.json` | email / key / exit / chat-200 models per account |
 | `state.json` | egress ledger (5-registration/day accounting) — git-ignored |
-| `proxies.txt` | your exit list — git-ignored |
+| `proxies.txt` | your exit list — optional, git-ignored |
 
 ## 🔌 Connect to 9Router
 

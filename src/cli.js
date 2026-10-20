@@ -6,7 +6,8 @@
  *   https://api.getwaterfall.org/v1        registration + verification API
  *   https://api.getwaterfall.org/api/v1    OpenAI-compatible chat + /models
  *
- * Flow, per account, entirely over the exit's own connection:
+ * Flow, per account, entirely over the account's own route — an exit from the
+ * proxy pool, or the direct connection when no pool is given:
  *   1. GET  /v1/register/challenge        -> {challenge, difficulty, algorithm}
  *   2. solve sha256(challenge + nonce) with `difficulty` leading zero hex nibbles
  *   3. Mailtrap inbound inbox -> fresh `...@inbound-mailtrap.io` address
@@ -16,7 +17,12 @@
  *   7. chat-200 gate on a live free model; only a passing key is stored
  *
  * Registration is capped at 5 per network per day, so every account burns a
- * distinct exit and the ledger in state.json keeps a day's exits apart:
+ * distinct exit and the ledger in state.json keeps a day's exits apart. Your
+ * proxy list is OPTIONAL: pass --pool (or set the WATERFALL_PROXIES env, or
+ * drop a proxies.txt next to this file) and every request goes through an exit
+ * from it — a dead exit fails that attempt and never falls back direct; with no
+ * pool the rail prints `running WITHOUT a proxy (direct)` and dials straight
+ * out, booked as the one `direct` exit under the same 5-per-network cap:
  *
  *   node providers/waterfall/mint.js probe          # surface + gate proof
  *   node providers/waterfall/mint.js screen         # which exits carry the API
@@ -84,10 +90,17 @@ const UA_POOL = [
 // Measured 2026-10-19: ~9 % of these free exits answer the register challenge and
 // ~11 % of those carry a whole sign-up, so a 50-key day needs *thousands* of
 // candidates — hence the wide, shuffled samples below.
-// The user's own pool comes first: WATERFALL_PROXIES env (launcher) or a local
-// proxies.txt next to this file; the named lab dumps below are spare tanks.
+// The user's own pool comes first [optional]: --pool, else the WATERFALL_PROXIES
+// env (launcher), else a local proxies.txt next to this file; the named lab
+// dumps below are spare tanks. With none of them the rail runs on one direct exit.
+const POOL_ARG = (() => {
+  const eq = process.argv.find((a) => a.startsWith('--pool='));
+  if (eq) return eq.slice('--pool='.length);
+  const i = process.argv.indexOf('--pool');
+  return i > -1 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : '';
+})();
 const PROXY_POOLS = [
-  { file: process.env.WATERFALL_PROXIES || 'proxies.txt' },
+  { file: POOL_ARG || process.env.WATERFALL_PROXIES || 'proxies.txt' },
   { file: 'proxy-lab/out/proxies-emergency.txt' },
   { file: 'proxy-lab/out/chrome-safe-exits.txt' },
   { file: 'proxy-lab/out/free-proxies-live.txt' },
@@ -142,6 +155,13 @@ function poolLines(file, { sample = 0, code = false } = {}) {
   return lines;
 }
 
+// No pool = DIRECT mode: a proxy list is recommended at scale (per-IP limits,
+// bans) but the tool works without one. This sentinel is the single exit of a
+// pool-less run — the HTTP layer keys off `protocol: 'direct'` and dials
+// straight out, and the ledger books it under `state.exits.direct`.
+const DIRECT_EXIT = { protocol: 'direct', host: 'direct', port: 0, key: 'direct', line: '' };
+let directNoticed = false;
+
 function allExits() {
   const seen = new Set();
   const out = [];
@@ -160,6 +180,15 @@ function allExits() {
   const screened = findPoolFile('proxy-lab/out/waterfall-exits.json') || EXITS_FILE;
   if (fs.existsSync(screened)) {
     for (const entry of JSON.parse(fs.readFileSync(screened, 'utf8'))) add(parseProxy(entry.proxy || entry));
+  }
+  if (!out.length) {
+    // Not one pool file yielded a usable line: the rail still works — on its
+    // single direct exit, and the 5-per-network cap then binds our own line.
+    if (!directNoticed) {
+      directNoticed = true;
+      log('no proxy list found — running WITHOUT a proxy (direct). Put exits in proxies.txt (or pass --pool / set WATERFALL_PROXIES) to route through them.');
+    }
+    return [DIRECT_EXIT];
   }
   return out;
 }
@@ -423,7 +452,12 @@ async function screen() {
       try {
         const r = await json(e, `${REG}/register/challenge`, { timeoutMs: 9000 }, w);
         if (r.json && r.json.challenge) {
-          good.push({ proxy: `${e.protocol}://${e.host}:${e.port}`, difficulty: r.json.difficulty, algorithm: r.json.algorithm });
+          good.push({
+            // `direct` (no pool) is the marker the probe and gate sweep parse back.
+            proxy: e.protocol === 'direct' ? 'direct' : `${e.protocol}://${e.host}:${e.port}`,
+            difficulty: r.json.difficulty,
+            algorithm: r.json.algorithm,
+          });
         }
       } catch (err) {
         /* dead exit, expected */
@@ -438,7 +472,12 @@ async function screen() {
 
 async function probe() {
   const exits = await screen();
+  if (!exits.length) {
+    log('probe: no exit reached /v1/register/challenge — nothing to probe');
+    return null;
+  }
   const key = readKeys()[0];
+  // `direct` (no pool) parses to null, which the HTTP layer dials straight out.
   const p = parseProxy(exits[0].proxy);
   const models = await json(p, `${API}/models`, {}, 0);
   const ids = models.json ? (models.json.data || models.json).map((m) => m.id) : [];
@@ -529,10 +568,17 @@ async function gateSweep(items, state, { rounds = 3 } = {}) {
   if (!items.length) return [];
   const exits = screenedExits();
   if (!exits.length) {
-    log('gate sweep skipped: no screened exits');
-    state.pending.push(...items);
-    saveState(state);
-    return [];
+    // No screened pool on disk. A pool-less run gates on its one direct exit;
+    // with a pool supplied the sweep is skipped and the keys stay pending — a
+    // supplied pool never silently gates over the direct connection.
+    const own = allExits();
+    if (own.length === 1 && own[0].key === 'direct') exits.push(DIRECT_EXIT);
+    else {
+      log('gate sweep skipped: no screened exits');
+      state.pending.push(...items);
+      saveState(state);
+      return [];
+    }
   }
   const live = await discoverGates(exits[0], items[0].key, 0);
   const models = live.length ? live : GATE_MODELS;
@@ -648,6 +694,30 @@ function collect() {
 }
 
 async function main() {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    console.log(`waterfall-bulk-apikey — mint Waterfall accounts, one key each, verified by a live chat call.
+
+  node src/cli.js run --count 50 --concurrency 12   mint + chat-200 gate
+  node src/cli.js gate --rounds 4                   re-sweep keys that answered 429/503
+  node src/cli.js probe                             routes · mail rail · catalogue · existing-key gate
+  node src/cli.js screen                            raw exit lists -> a live exit pool
+  node src/cli.js collect                           rebuild keys.txt from accounts.json
+  node src/cli.js --help
+
+  --count N         accounts to mint                                        [50]
+  --concurrency N   accounts in flight, one exit per account                [12]
+  --mail <rail>     mailbox rail: chain | temptf | mailtrap              [chain]
+  --model <id>      verification model    [nemotron-3-nano-omni-30b-a3b-reasoning-nvidia-direct]
+  --rounds N        gate rounds for pending keys                             [4]
+  --pool <file>     proxy list, one exit per line (env WATERFALL_PROXIES) [optional]
+
+  WATERFALL_PROXIES env   proxy list path (wins over the default proxies.txt,
+                          not over --pool)                              [optional]
+
+Requests go through your proxy list when one is provided (--pool / WATERFALL_PROXIES). Without a pool the tool connects directly.`);
+    process.exit(0);
+  }
+
   // Accept both the plain modes and the launcher form (`node src/cli.js
   // --count N --concurrency N`) — anything that is not a known mode is a run.
   const KNOWN = new Set(['collect', 'screen', 'probe', 'run', 'gate', 'mint']);

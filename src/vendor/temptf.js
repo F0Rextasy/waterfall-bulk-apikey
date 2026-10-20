@@ -16,7 +16,7 @@
  *   GET  /api/stats?providers=…                               -> {totalReceived}
  *
  * Measured 2026-10-18: `/api/account` answered
- * `{"email":"maricruzkasuba5465+jb4gq9dd66@hotmail.com"}` and `/api/check`
+ * `{"email":"<sandbox-address>"}` and `/api/check`
  * answered `{"data":[],"totalReceived":4740775}`, so both the address and the
  * reader work without a browser, a Cloudflare cookie or a captcha.
  *

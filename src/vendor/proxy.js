@@ -13,9 +13,10 @@
  *   · Node's https client, via `createAgent()`                    -> an https.Agent
  *     whose `createConnection()` returns a TLS socket layered on the tunnel.
  *
- * Everything here is written so a failed proxy fails the *account*, never
- * falls back to a direct connection: the whole point is that no request ever
- * leaves the machine from its own address.
+ * A failed proxy fails the *account* — a supplied pool never falls back to a
+ * direct connection. Direct dialing happens only when the caller hands in no
+ * proxy at all (`null`) or the explicit `{ protocol: 'direct' }` sentinel that
+ * pool-less mode uses.
  */
 
 const net = require('net');
@@ -114,8 +115,13 @@ function browserUrl(proxy) {
   return `${scheme}://${proxy.host}:${proxy.port}`;
 }
 
+/** The direct-mode marker: no proxy at all (`null`) or the `{ protocol: 'direct' }` sentinel. */
+function isDirect(proxy) {
+  return !proxy || proxy.protocol === 'direct';
+}
+
 function label(proxy) {
-  if (!proxy) return '(direct)';
+  if (isDirect(proxy)) return '(direct)';
   const auth = proxy.username ? `${encodeURIComponent(proxy.username)}:***@` : '';
   return `${proxy.protocol}://${auth}${proxy.host}:${proxy.port}`;
 }
@@ -428,10 +434,11 @@ function createAgent(proxy, options) {
 }
 
 /**
- * Fetches a URL through `proxy` (or straight out when it is null) and returns
- * the body as text. Used to check what exit address a proxy really presents —
- * a transparent proxy passes every other test and still leaks your own IP — and
- * as the HTTP layer of the inbox backends.
+ * Fetches a URL through `proxy` and returns the body as text. With no proxy at
+ * all (`null`) or the `{ protocol: 'direct' }` sentinel the request goes
+ * straight out — no proxy agent is built. Used to check what exit address a
+ * proxy really presents — a transparent proxy passes every other test and still
+ * leaks your own IP — and as the HTTP layer of the inbox backends.
  *
  * `method`/`body` exist because several of those backends hand out an address
  * with a POST; a body that is not a Buffer is JSON-encoded, and the JSON content
@@ -464,7 +471,7 @@ function fetchText(proxy, url, { timeoutMs = 15000, headers = {}, method = 'GET'
         host: u.hostname,
         port: u.port || (u.protocol === 'https:' ? 443 : 80),
         path: u.pathname + u.search,
-        agent: proxy ? createAgent(proxy) : undefined,
+        agent: isDirect(proxy) ? undefined : createAgent(proxy),
         headers: finalHeaders,
       },
       (res) => {
