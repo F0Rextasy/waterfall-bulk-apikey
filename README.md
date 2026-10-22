@@ -101,6 +101,11 @@ The launcher asks for the proxy list, count and verification model, remembers th
 
 ## ✅ Verified working — every key is tested
 
+> **Quality gates.** Every key here passed a live `chat-200` before it was written to `keys.txt`
+> (dead keys are never shipped). Router combos follow the same rule at the model level: an entry is
+> added **only if the model answers `chat-200` and can call tools** — a model without tool support,
+> a dead key or a dead provider is dropped instead of added. Works with **9Router and OmniRoute**.
+
 | Check | Result |
 | --- | --- |
 | `GET /v1/register/challenge` | **200** — sha256 proof-of-work (difficulty ≈4) |
@@ -170,7 +175,6 @@ node src/connect-9router.js
 ```
 
 Defaults: `--base http://localhost:20128`, `--password 123456`, `--name "Waterfall"`, `--prefix waterfall`, `--base-url https://api.getwaterfall.org/api/v1`.
-
 
 ## 🔌 Connect to OmniRoute
 
